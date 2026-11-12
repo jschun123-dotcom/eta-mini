@@ -1,7 +1,9 @@
 import importlib.util
 import json
 import math
+import shlex
 import tomllib
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -65,24 +67,125 @@ def test_eta_known_values(distance_km, pending_orders, expected):
     assert body["minutes"] == pytest.approx(expected)
 
 
+# ── 소개 페이지 (GET /) ──────────────────────────────────────────────────
+# HTML 모양(태그, 클래스, 공백)이 아니라 화면에 보이는 내용을 비교하려고 페이지를 파싱한다.
+class _PageParser(HTMLParser):
+    """소개 페이지에서 표의 셀 텍스트, 입력칸 속성, 링크, id 가 붙은 <pre> 의 텍스트를 뽑는다."""
+
+    def __init__(self):
+        super().__init__()
+        self.tables: list[list[list[str]]] = []
+        self.inputs: dict[str, dict] = {}
+        self.links: set[str] = set()
+        self.pre: dict[str, str] = {}
+        self._cell: list[str] | None = None
+        self._pre_id: str | None = None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "table":
+            self.tables.append([])
+        elif tag == "tr":
+            self.tables[-1].append([])
+        elif tag in ("td", "th"):
+            self._cell = []
+        elif tag == "input":
+            self.inputs[a["id"]] = a
+        elif tag == "a" and "href" in a:
+            self.links.add(a["href"])
+        elif tag == "pre" and "id" in a:
+            self._pre_id = a["id"]
+            self.pre[self._pre_id] = ""
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._cell is not None:
+            self.tables[-1][-1].append(" ".join("".join(self._cell).split()))
+            self._cell = None
+        elif tag == "pre":
+            self._pre_id = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell.append(data)
+        if self._pre_id is not None:
+            self.pre[self._pre_id] += data
+
+    def table_with_header(self, *header: str) -> dict[str, list[str]]:
+        """머리글이 header 로 시작하는 표를 찾아 {첫 열 값: 행} 으로 돌려준다."""
+        for table in self.tables:
+            if tuple(table[0][: len(header)]) == header:
+                return {row[0]: row for row in table[1:]}
+        raise AssertionError(f"머리글 {header} 인 표가 없음")
+
+
+def _parse_index() -> _PageParser:
+    parser = _PageParser()
+    parser.feed(client.get("/").text)
+    return parser
+
+
 def test_index_returns_html_intro():
-    """/ 는 200 과 HTML 소개 페이지(버전, /eta 설명, /docs·/health 링크 포함)를 돌려준다."""
+    """/ 는 200 과 HTML 소개 페이지(버전, 엔드포인트 목록, /docs·/health 링크)를 돌려준다."""
     res = client.get("/")
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/html")
-    body = res.text
-    assert APP_VERSION in body
-    assert "POST /eta" in body
-    assert 'href="/docs"' in body and 'href="/health"' in body
+    assert APP_VERSION in res.text
+    page = _parse_index()
+    endpoints = page.table_with_header("메서드", "경로")
+    assert endpoints["POST"][1] == "/eta"
+    assert {"/docs", "/health"} <= page.links
+
+
+def test_index_field_tables_match_contract():
+    """요청 표는 필드별 타입·허용 범위(거리 실수 0~50, 주문 정수 0~500)를, 응답 표는 응답 필드를 보여 준다."""
+    page = _parse_index()
+    req = page.table_with_header("필드", "타입", "허용 범위")
+    assert req["distance_km"][1:3] == ["실수", "0 ~ 50"]
+    assert req["pending_orders"][1:3] == ["정수", "0 ~ 500"]
+    res = page.table_with_header("필드", "타입", "설명")
+    assert set(res) == {"minutes", "model"}
+
+
+def test_index_try_form_accepts_only_valid_range():
+    """바로 계산해 보기 입력칸은 필수이고, 최소·최대는 실제 검증 범위와 같다."""
+    inputs = _parse_index().inputs
+    assert (float(inputs["distance_km"]["min"]), float(inputs["distance_km"]["max"])) == (0, 50)
+    assert (float(inputs["pending_orders"]["min"]), float(inputs["pending_orders"]["max"])) == (0, 500)
+    assert "required" in inputs["distance_km"] and "required" in inputs["pending_orders"]
+
+
+def test_index_try_form_does_not_block_values_api_accepts():
+    """폼은 API 가 받는 소수 거리(예: 0.001)를 막지 않고, 정수만 받는 주문 수는 1 단위로 받는다."""
+    inputs = _parse_index().inputs
+    assert inputs["distance_km"]["step"] == "any"
+    assert inputs["pending_orders"]["step"] == "1"
+
+
+def test_index_curl_example_calls_eta():
+    """curl 예시는 /eta 에 POST 로 예시 요청과 같은 JSON 본문을 보낸다."""
+    args = shlex.split(_parse_index().pre["curl"])
+    assert args[args.index("-X") + 1] == "POST"
+    assert any(a.endswith("/eta") for a in args)
+    assert json.loads(args[args.index("-d") + 1]) == {"distance_km": 2.5, "pending_orders": 3}
+
+
+def test_index_422_example_matches_real_response():
+    """소개 페이지의 422 예시는 같은 요청(거리 상한 초과)의 실제 422 응답과 type·loc·msg 가 같다."""
+    shown = json.loads(_parse_index().pre["example-422"])["detail"][0]
+    real = client.post("/eta", json={"distance_km": 51, "pending_orders": 3})
+    assert real.status_code == 422
+    real_err = real.json()["detail"][0]
+    assert {k: shown[k] for k in ("type", "loc", "msg")} == {k: real_err[k] for k in ("type", "loc", "msg")}
 
 
 def test_index_example_matches_real_eta_response():
-    """소개 페이지의 요청·응답 예시는 실제 /eta 응답과 같다."""
-    example_req = {"distance_km": 2.5, "pending_orders": 3}
-    real = client.post("/eta", json=example_req).json()
-    body = client.get("/").text
-    assert json.dumps(example_req, ensure_ascii=False) in body
-    assert json.dumps(real, ensure_ascii=False) in body
+    """소개 페이지의 요청 예시를 실제로 보내면 페이지의 응답 예시와 같은 응답이 온다."""
+    pre = _parse_index().pre
+    shown_req = json.loads(pre["example-req"])
+    shown_res = json.loads(pre["example-res"])
+    real = client.post("/eta", json=shown_req)
+    assert real.status_code == 200
+    assert real.json() == shown_res
 
 
 def test_version_matches_pyproject():
