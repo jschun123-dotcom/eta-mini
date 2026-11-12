@@ -1,11 +1,13 @@
 import importlib.util
+import json
 import math
+import tomllib
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from api.app import app
+from api.app import APP_VERSION, app
 
 client = TestClient(app)
 # 서버 내부 예외를 테스트 쪽으로 다시 던지지 않고 500 응답으로 받기 위한 클라이언트
@@ -61,6 +63,34 @@ def test_eta_known_values(distance_km, pending_orders, expected):
     # 기대값은 rule 공식 기준이므로, 다른 구현체가 켜져 있으면 원인이 바로 보이게 먼저 확인한다
     assert body["model"] == "rule"
     assert body["minutes"] == pytest.approx(expected)
+
+
+def test_index_returns_html_intro():
+    """/ 는 200 과 HTML 소개 페이지(버전, /eta 설명, /docs·/health 링크 포함)를 돌려준다."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("text/html")
+    body = res.text
+    assert APP_VERSION in body
+    assert "POST /eta" in body
+    assert 'href="/docs"' in body and 'href="/health"' in body
+
+
+def test_index_example_matches_real_eta_response():
+    """소개 페이지의 요청·응답 예시는 실제 /eta 응답과 같다."""
+    example_req = {"distance_km": 2.5, "pending_orders": 3}
+    real = client.post("/eta", json=example_req).json()
+    body = client.get("/").text
+    assert json.dumps(example_req, ensure_ascii=False) in body
+    assert json.dumps(real, ensure_ascii=False) in body
+
+
+def test_version_matches_pyproject():
+    """/health 와 OpenAPI 문서의 버전은 pyproject.toml 의 version 과 같다."""
+    with open(APP_PATH.parents[1] / "pyproject.toml", "rb") as f:
+        expected = tomllib.load(f)["project"]["version"]
+    assert client.get("/health").json()["version"] == expected
+    assert client.get("/openapi.json").json()["info"]["version"] == expected
 
 
 def test_health_default_model_is_rule():
