@@ -48,7 +48,7 @@ def test_eta_model_matches_health():
         (0, 4, 18.0),  # 경계값: 거리만 0
         (4, 0, 22.0),  # 경계값: 주문만 0
         (0.001, 0, 10.003),  # 경계값: 아주 작은 양수 거리
-        (1000, 10000, 23010.0),  # 경계값: 큰 값
+        (50, 500, 1160.0),  # 경계값: 상한 (거리 50km, 주문 500건)
     ],
 )
 def test_eta_known_values(distance_km, pending_orders, expected):
@@ -139,41 +139,48 @@ def test_eta_lenient_inputs_are_accepted(payload, expected):
     assert res.json()["minutes"] == pytest.approx(expected)
 
 
-# ── 알려진 버그: 비유한 수와 오버플로 ───────────────────────────────────────
-# 계약: 요청은 422 로 거부되거나, 200 이면 minutes 가 유한한 숫자여야 한다. 500 은 안 된다.
-# 지금 구현은 이 계약을 어기므로 xfail(strict=True) 로 기록한다. 고쳐지면 XPASS 로 실패해 알려 준다.
-KNOWN_BUG = pytest.mark.xfail(
-    strict=True, reason="비유한 수/오버플로 입력 검증 없음 (앱 코드 수정 필요)"
-)
-
-
-@KNOWN_BUG
-@pytest.mark.parametrize("raw_number", ["NaN", "Infinity"])
-def test_eta_non_finite_distance_returns_422(raw_number):
-    """NaN, Infinity 거리는 422 로 거부한다."""
-    res = lenient_client.post(
-        "/eta",
-        content=f'{{"distance_km": {raw_number}, "pending_orders": 1}}',
-        headers={"content-type": "application/json"},
-    )
-    assert res.status_code == 422
-
-
-@KNOWN_BUG
+# ── 입력 범위: 상한(거리 50km, 주문 500건)과 비유한 수 ──────────────────────
+# 500 이 아니라 422 가 나오는지 보려고, 서버 예외를 응답으로 받는 lenient_client 를 쓴다.
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "bad_field"),
     [
-        {"distance_km": 1e308, "pending_orders": 0},  # 계산 중 무한대로 넘침
-        {"distance_km": 1, "pending_orders": 10**400},  # float 변환 오버플로
+        ({"distance_km": 50.001, "pending_orders": 0}, "distance_km"),  # 상한 바로 위
+        ({"distance_km": 0, "pending_orders": 501}, "pending_orders"),  # 상한 바로 위
+        ({"distance_km": 1e308, "pending_orders": 0}, "distance_km"),  # 예전 오버플로 입력
+        ({"distance_km": 1, "pending_orders": 10**400}, "pending_orders"),  # 예전 오버플로 입력
     ],
 )
-def test_eta_overflow_is_rejected_or_finite(payload):
-    """계산이 넘칠 만큼 큰 입력은 422 이거나, 200 이면 minutes 가 유한한 숫자다."""
+def test_eta_above_upper_bound_returns_422(payload, bad_field):
+    """상한을 넘는 입력은 서버 오류 없이 422 로 거부하고, 문제 필드를 알려 준다."""
     res = lenient_client.post("/eta", json=payload)
-    assert res.status_code in (200, 422)
-    if res.status_code == 200:
-        minutes = res.json()["minutes"]
-        assert isinstance(minutes, (int, float)) and math.isfinite(minutes)
+    assert res.status_code == 422
+    locs = [tuple(err["loc"]) for err in res.json()["detail"]]
+    assert ("body", bad_field) in locs
+
+
+@pytest.mark.parametrize(
+    "raw_body",
+    [
+        '{"distance_km": NaN, "pending_orders": 1}',
+        '{"distance_km": Infinity, "pending_orders": 1}',
+        '{"distance_km": -Infinity, "pending_orders": 1}',
+        '{"distance_km": NaN}',  # 필드 누락 오류의 input(본문 전체)에 NaN 이 섞인 경우
+    ],
+)
+def test_eta_non_finite_distance_returns_422(raw_body):
+    """NaN, Infinity, -Infinity 거리는 서버 오류 없이 422 로 거부한다."""
+    res = lenient_client.post(
+        "/eta", content=raw_body, headers={"content-type": "application/json"}
+    )
+    assert res.status_code == 422
+    assert ("body", "distance_km") in [tuple(e["loc"]) for e in res.json()["detail"]]
+
+
+def test_eta_minutes_is_finite_at_upper_bound():
+    """허용 범위의 최댓값에서도 minutes 는 유한한 숫자다."""
+    res = client.post("/eta", json={"distance_km": 50, "pending_orders": 500})
+    minutes = res.json()["minutes"]
+    assert isinstance(minutes, (int, float)) and math.isfinite(minutes)
 
 
 def test_unknown_model_impl_fails_at_import(monkeypatch):
