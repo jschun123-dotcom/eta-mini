@@ -4,9 +4,6 @@ version = "0.3.0"
 requires-python = ">=3.14"
 dependencies = [
     "fastapi>=0.162.4",
-    "joblib>=1.6.0",
-    "numpy>=2.5.5",
-    "scikit-learn>=1.9.1",
     "uvicorn>=0.54.0",
 ]
 
@@ -15,21 +12,8 @@ dev = [
     "httpx2>=2.16.0",
     "pytest>=9.2.0",
 ]
-train = [
-    "torch>=2.15.0",
-]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["api/tests"]
 addopts = "-ra"
-
-[[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
-# 이 줄이 없다면, uv가 다른 모든 패키지까지 이 저장소에서 **먼저** 찾다가 의존성 해석에 실패한다.
-# 이 줄이 있으면 `torch`만 이 저장소를 쓴다.
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch-cpu" }

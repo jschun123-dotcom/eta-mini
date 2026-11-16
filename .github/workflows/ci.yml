@@ -42,24 +42,3 @@ jobs:
           tags: |
             ${{ env.IMAGE }}/eta-api:${{ github.ref_name }}
             ${{ env.IMAGE }}/eta-api:latest
-
-  # ── MLOps 2단계: 재현 가능한 학습 + 모델 검증 게이트 + ONNX 변환 ──
-  train:
-    needs: test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - run: mkdir -p artifacts
-      - run: uv run --locked --group train python -m training.train_sklearn
-      - run: uv run --locked python -m training.validate_model sklearn
-      - run: uv run --locked --group train python -m training.train_dl
-      - run: uv run --locked python -m training.validate_model dl
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: model-artifacts
-          path: artifacts/
