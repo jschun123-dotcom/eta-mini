@@ -42,3 +42,41 @@ jobs:
           tags: |
             ${{ env.IMAGE }}/eta-api:${{ github.ref_name }}
             ${{ env.IMAGE }}/eta-api:latest
+
+  # ── MLOps 2단계: 재현 가능한 학습 + 모델 검증 게이트 + ONNX 변환 ──
+  # 모델마다 job 을 나눠, 어느 모델이 실패했는지 Actions 화면에서 바로 보이게 한다 (둘은 병렬 실행)
+  train-sklearn:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: mkdir -p artifacts # 커밋하지 않는 폴더라 새 checkout 에는 없다
+      - name: 학습 (sklearn)
+        run: uv run --locked --group train python -m training.train_sklearn
+      - name: 검증 게이트 (sklearn) # 실패하면 여기서 중단 → 업로드·배포 안 됨
+        run: uv run --locked python -m training.validate_model sklearn
+      - uses: actions/upload-artifact@v7
+        with:
+          name: model-sklearn
+          path: artifacts/
+
+  train-dl:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: mkdir -p artifacts
+      - name: 학습 (dl)
+        run: uv run --locked --group train python -m training.train_dl
+      - name: 검증 게이트 (dl)
+        run: uv run --locked python -m training.validate_model dl
+      - uses: actions/upload-artifact@v7
+        with:
+          name: model-dl
+          path: artifacts/
