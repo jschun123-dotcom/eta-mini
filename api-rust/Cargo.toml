@@ -1,0 +1,18 @@
+[package]
+name = "eta-api"
+version = "0.0.0" # 앱 버전은 빌드할 때 pyproject.toml 에서 읽어 APP_VERSION 으로 넣는다 (Dockerfile 참고)
+edition = "2024"
+publish = false
+
+[dependencies]
+axum = "0.8.9"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+serde = { version = "1.0", features = ["derive"] }
+# arbitrary_precision: JSON 숫자를 원문 그대로 받는다 → 10**400 같은 큰 정수도 잃지 않고 422 로 거부할 수 있다
+serde_json = { version = "1.0.154", features = ["arbitrary_precision"] }
+# load-dynamic: ONNX Runtime 을 내려받지 않고, 실행 중에 ORT_LIB 경로의 공유 라이브러리를 불러온다
+# api-31: ONNX Runtime 1.31 이상이 제공하는 C API 버전을 쓴다 (uv.lock 의 onnxruntime 은 그보다 새 버전)
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["std", "load-dynamic", "api-31"] }
+
+[profile.release]
+strip = true
