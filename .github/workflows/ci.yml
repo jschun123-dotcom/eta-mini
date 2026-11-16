@@ -149,3 +149,21 @@ jobs:
             artifacts/model_dl.onnx \
             artifacts/metrics_sklearn.json \
             artifacts/metrics_dl.json
+
+  deploy: # ── 서버 배포: Render 에 새 이미지로 다시 배포하라고 요청 ──
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Render 배포 요청
+        env:
+          DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$DEPLOY_HOOK" ]; then
+            echo "RENDER_DEPLOY_HOOK_URL 이 등록되지 않아 배포를 건너뛴다"
+            exit 0
+          fi
+          # 방금 올린 버전 태그의 이미지로 배포한다 (imgURL 은 URL 인코딩한 이미지 주소)
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}/eta-api:${GITHUB_REF_NAME}"
+          IMG_URL=$(jq -rn --arg v "$IMAGE" '$v|@uri')
+          curl -fsS -X POST "${DEPLOY_HOOK}&imgURL=${IMG_URL}"
