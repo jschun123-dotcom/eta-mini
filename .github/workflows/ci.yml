@@ -80,3 +80,24 @@ jobs:
         with:
           name: model-dl
           path: artifacts/
+
+  # 두 학습 job 은 서로 다른 runner 라 모델 파일을 이 job 에 모아서 변환한다
+  export-onnx:
+    needs: [train-sklearn, train-dl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/download-artifact@v8 # model-sklearn + model-dl → artifacts/
+        with:
+          pattern: model-*
+          path: artifacts/
+          merge-multiple: true
+      - name: ONNX 변환 (원본 vs ONNX 예측 일치 확인 포함)
+        run: uv run --locked --group train python -m training.export_onnx
+      - uses: actions/upload-artifact@v7 # 수업 자료의 parity·image·release job 이 이 이름으로 받는다
+        with:
+          name: model-artifacts
+          path: artifacts/
