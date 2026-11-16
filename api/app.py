@@ -29,7 +29,7 @@ class EtaResponse(BaseModel):
     minutes: float = Field(description="배달 예상 시간 (분)")
     model: str = Field(description="예측을 낸 구현체 이름 (장애 추적용)")
 
-APP_VERSION = "0.3.0"  # pyproject.toml 의 version 과 같아야 한다 (테스트로 확인)
+APP_VERSION = "1.0.0"  # pyproject.toml 의 version 과 같아야 한다 (테스트로 확인)
 
 app = FastAPI(title="delivery-eta", version=APP_VERSION)
 
